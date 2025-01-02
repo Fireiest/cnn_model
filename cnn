@@ -1,0 +1,225 @@
+import pandas as pd
+import yfinance as yf
+import pandas_ta as ta
+from scipy.stats import linregress
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import confusion_matrix
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM, Dropout, MaxPooling1D, Conv1D
+from tensorflow.keras.callbacks import EarlyStopping
+import keras.losses
+import os
+all_weights_folder = "all_model_weights_3"
+if not os.path.exists(all_weights_folder):
+    os.makedirs(all_weights_folder)
+df = pd.read_csv('/Users/baps/Documents/model_training/NIFTY_50_daily.csv')
+df = df[-1000:]
+df
+#Functions
+#EMA Slope Function
+def slope(series, window):
+	slopes = []
+	for i in range(len(series)):
+		if i < window - 1:
+			slopes.append(np.nan)
+		else:
+			y = series[i - window + 1: i + 1]
+			x = np.arange(window)
+			slope, _, _, _, _ = linregress(x, y)
+			slopes.append(slope)
+	return pd.Series(slopes, index=series.index)
+
+#Bullish Engulfing Candle
+def identify_engulfing_candle(df):
+    # Ensure the dataframe has the necessary columns
+    if not all(col in df.columns for col in ['Open', 'High', 'Low', 'Close']):
+        raise ValueError("DataFrame must contain 'Open', 'High', 'Low', and 'Close' columns.")
+
+    result = []
+
+    for i in range(1, len(df)):
+        prev_candle = df.iloc[i-1]
+        current_candle = df.iloc[i]
+        
+        # Bullish Engulfing: current candle completely engulfs the previous candle, and closes higher
+        if (current_candle['Open'] < current_candle['Close'] and
+            current_candle['Open'] < prev_candle['Close'] and
+            current_candle['Close'] > prev_candle['Open']):
+            result.append(1)
+        
+        # Bearish Engulfing: current candle completely engulfs the previous candle, and closes lower
+        elif (current_candle['Open'] > current_candle['Close'] and
+              current_candle['Open'] > prev_candle['Close'] and
+              current_candle['Close'] < prev_candle['Open']):
+            result.append(-1)
+        
+        # Otherwise, no engulfing
+        else:
+            result.append(0)
+    
+    # For the first row, no previous candle to compare
+    result.insert(0, 0)
+    
+    df['Engulfing Signal'] = result
+    return df['Engulfing Signal']
+
+#Trend Identification
+def trend_identification(row):
+    if row['ema20'] > row['ema50'] > row['ema100']:
+        return 1
+    elif row['ema20'] < row['ema50'] < row['ema100']:
+        return -1
+    else:
+        return 0
+    
+def BB_signal(df, current_candle, backcandles):
+    candle_open_price = df.Open[current_candle]
+    bbl = df['BBL_15_1.5'][current_candle]
+    bbu = df['BBU_15_1.5'][current_candle]
+
+    if (candle_open_price<=bbl):
+            return 2
+    if (candle_open_price>=bbu):
+            return 1
+    return 0
+#Technical Indicators
+
+#ATR
+df['atr'] = ta.atr(df['High'],df['Low'], df['Close'])
+df['atr_slope'] = slope(df['atr'], window=5)
+#RSI
+df['rsi'] = ta.rsi(df['Close'])
+#EMA
+df['ema20'] = ta.ema(df['Close'], length=20)
+df['ema50'] = ta.ema(df['Close'], length=40)
+df['ema100'] = ta.ema(df['Close'], length=100)
+df['ema200'] = ta.ema(df['Close'], length=200)
+df['distance_from_ema20'] = df['Close'] - df['ema20']
+df['distance_from_ema50'] = df['Close'] - df['ema50']
+df['distance_from_ema100'] = df['Close'] - df['ema100']
+df['distance_from_ema200'] = df['Close'] - df['ema200']
+df['ema20_slope'] = slope(df['ema20'], window=5)
+df['ema50_slope'] = slope(df['ema50'], window=5)
+df['ema100_slope'] = slope(df['ema100'], window=5)
+df['ema200_slope'] = slope(df['ema200'], window=5)
+df['trend'] = df.apply(trend_identification, axis=1)
+#Bollinger Bands
+bbands = ta.bbands(df['Close'], length=15, std=1.5)
+df = df.join(bbands)
+df['distance_bb'] = df['BBU_15_1.5'] - df['BBL_15_1.5']
+#Candle Details
+df['candle_size'] = df['Open'] - df['Close']
+df['engulfing_candle'] = identify_engulfing_candle(df)
+#Returns and Lag_returns
+df['returns'] = df['Close'].pct_change()
+df['lag_1'] = df['returns'].shift(1)
+df['lag_2'] = df['returns'].shift(2)
+df['lag_3'] = df['returns'].shift(3)
+#Target
+df['target'] = df['returns'].shift(-1)
+df['target'] = np.where(df['target'] >= 0,1,0)
+
+df.dropna(inplace=True)
+
+# df.columns
+# corr_matrix = df.drop(['Date', 'Close', 'High', 'Low', 'Open', 'Volume'], axis=1).corr('spearman')
+# plt.figure(figsize=(12,12))
+# sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
+# plt.show()
+# X = df[['atr','atr_slope','rsi','ema20','ema50','ema100','ema200', 'distance_from_ema20','distance_from_ema50','distance_from_ema100','distance_from_ema200',
+#         'ema20_slope','ema50_slope','ema100_slope','ema200_slope','BBL_15_1.5', 'BBM_15_1.5', 'BBU_15_1.5', 'BBB_15_1.5', 'BBP_15_1.5',
+#        'distance_bb', 'candle_size', 'Engulfing Signal', 'engulfing_candle',
+#        'returns', 'lag_1', 'lag_2', 'lag_3']]
+# y = df[['target']]
+
+# split_ratio = 0.8
+# split_point = int(len(df) * split_ratio)
+
+# X_train = X.iloc[:split_point] 
+# y_train = y.iloc[:split_point]
+# X_test = X.iloc[split_point:]
+# y_test = y.iloc[split_point:]
+
+# scaler = StandardScaler()
+# X_train_scaled = scaler.fit_transform(X_train)
+# X_test_scaled = scaler.transform(X_test)
+
+# X_train_scaled_full = pd.DataFrame(X_train_scaled, columns=X.columns)
+# X_train_scaled_full['trend'] = df['trend'].iloc[:split_point].values
+# X_test_scaled_full = pd.DataFrame(X_test_scaled, columns=X.columns)
+# X_test_scaled_full['trend'] = df['trend'].iloc[split_point:].values
+
+features = df[['atr','atr_slope','rsi','ema20','ema50','ema100','ema200', 'distance_from_ema20','distance_from_ema50','distance_from_ema100','distance_from_ema200',
+        'ema20_slope','ema50_slope','ema100_slope','ema200_slope','BBL_15_1.5', 'BBM_15_1.5', 'BBU_15_1.5', 'BBB_15_1.5', 'BBP_15_1.5',
+       'distance_bb', 'candle_size', 'Engulfing Signal', 'engulfing_candle',
+       'returns', 'lag_1', 'lag_2', 'lag_3','trend']]
+scaler = MinMaxScaler(feature_range=(0,1))
+scaled_features = scaler.fit_transform(features)
+sequential_length = 50
+X, y = [], []
+
+for i in range(sequential_length, len(scaled_features)):
+    X.append(scaled_features[i-sequential_length:i])
+    y.append(df['target'].iloc[i])
+    
+X, y = np.array(X), np.array(y)
+train_size = int(len(X) * 0.8)
+X_train, X_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
+
+model = Sequential()
+# CNN layers
+model.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(X_train.shape[1], X_train.shape[2])))
+model.add(MaxPooling1D(pool_size=2))
+model.add(Dropout(0.2))
+
+# LSTM layer
+model.add(LSTM(units=50, return_sequences=False))
+model.add(Dropout(0.2))
+
+# Output layer
+model.add(Dense(units=1))
+
+# Compile the model
+model.compile(optimizer='adam', loss='mean_squared_error')
+
+early_stop = EarlyStopping(verbose=1, patience = 5)
+
+# Train the model
+model.fit(X_train, y_train, epochs=100, batch_size=32, callbacks=[early_stop])
+
+# Predictions
+predictions = model.predict(X_test)
+binary_predictions = (predictions > 0).astype(int)
+
+# Confusion Matrix
+cm = confusion_matrix(y_test, binary_predictions)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Class 0', 'Class 1'], yticklabels=['Class 0', 'Class 1'])
+plt.xlabel('Predicted')
+plt.ylabel('Actual')
+plt.title('Confusion Matrix')
+plt.show()
+
+# Classification Report
+print("Classification Report:")
+print(classification_report(y_test, binary_predictions))
+
+# Cumulative Returns
+predicted_returns = np.where(binary_predictions == 1, np.abs(predictions.flatten()), -np.abs(predictions.flatten()))
+actual_cumulative_returns = np.cumprod(1 + df['returns'].iloc[-len(y_test):].values) - 1
+predicted_cumulative_returns = np.cumprod(1 + predicted_returns) - 1
+
+plt.figure(figsize=(14, 7))
+plt.plot(actual_cumulative_returns, label='Actual Cumulative Returns', color='blue', alpha=0.7)
+plt.plot(predicted_cumulative_returns, label='Model Cumulative Returns', color='orange', alpha=0.7)
+plt.title('Cumulative Returns: Actual vs Model')
+plt.xlabel('Time')
+plt.ylabel('Cumulative Returns')
+plt.legend()
+plt.show()
