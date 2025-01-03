@@ -1,3 +1,19 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jan  3 14:35:08 2025
+
+@author: baps
+"""
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jan  3 13:07:03 2025
+
+@author: baps
+"""
+
 import pandas as pd
 import yfinance as yf
 import pandas_ta as ta
@@ -14,10 +30,10 @@ from tensorflow.keras.layers import Dense, LSTM, Dropout, MaxPooling1D, Conv1D
 from tensorflow.keras.callbacks import EarlyStopping
 import keras.losses
 import os
-all_weights_folder = "all_model_weights_3"
+all_weights_folder = "cnn_model_weights_3"
 if not os.path.exists(all_weights_folder):
     os.makedirs(all_weights_folder)
-df = pd.read_csv('/Users/baps/Documents/model_training/NIFTY_50_daily.csv')
+df = pd.read_csv('/Users/baps/Documents/model_training/NIFTY_50_15min_data.csv')
 df = df[-4000:]
 df
 #Functions
@@ -160,7 +176,7 @@ features = df[['atr','atr_slope','rsi','ema20','ema50','ema100','ema200', 'dista
        'returns', 'lag_1', 'lag_2', 'lag_3','trend']]
 scaler = StandardScaler()
 scaled_features = scaler.fit_transform(features)
-sequential_length = 50
+sequential_length = 35
 X, y = [], []
 
 for i in range(sequential_length, len(scaled_features)):
@@ -203,7 +219,7 @@ for cnn in range(0,1000):
     # Predict on test data
     predictions = model.predict(X_test)
     
-    binary_predictions = (predictions > 0.7).astype(int)
+    binary_predictions = (predictions > 0.5).astype(int)
     conf_matrix = confusion_matrix(y_test, binary_predictions)
     long_matrix1 = conf_matrix[0, 1]
     long_matrix2 = conf_matrix[1, 1]
