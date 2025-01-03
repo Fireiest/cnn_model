@@ -7,7 +7,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM, Dropout, MaxPooling1D, Conv1D
@@ -18,7 +18,7 @@ all_weights_folder = "all_model_weights_3"
 if not os.path.exists(all_weights_folder):
     os.makedirs(all_weights_folder)
 df = pd.read_csv('/Users/baps/Documents/model_training/NIFTY_50_daily.csv')
-df = df[-1000:]
+df = df[-4000:]
 df
 #Functions
 #EMA Slope Function
@@ -158,7 +158,7 @@ features = df[['atr','atr_slope','rsi','ema20','ema50','ema100','ema200', 'dista
         'ema20_slope','ema50_slope','ema100_slope','ema200_slope','BBL_15_1.5', 'BBM_15_1.5', 'BBU_15_1.5', 'BBB_15_1.5', 'BBP_15_1.5',
        'distance_bb', 'candle_size', 'Engulfing Signal', 'engulfing_candle',
        'returns', 'lag_1', 'lag_2', 'lag_3','trend']]
-scaler = MinMaxScaler(feature_range=(0,1))
+scaler = StandardScaler()
 scaled_features = scaler.fit_transform(features)
 sequential_length = 50
 X, y = [], []
@@ -172,54 +172,70 @@ train_size = int(len(X) * 0.8)
 X_train, X_test = X[:train_size], X[train_size:]
 y_train, y_test = y[:train_size], y[train_size:]
 
-model = Sequential()
-# CNN layers
-model.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(X_train.shape[1], X_train.shape[2])))
-model.add(MaxPooling1D(pool_size=2))
-model.add(Dropout(0.2))
+for cnn in range(0,1000):
+    model = Sequential()
+    # CNN layers
+    model.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(X_train.shape[1], X_train.shape[2])))
+    model.add(MaxPooling1D(pool_size=2))
+    model.add(Dropout(0.2))
+    
+    # LSTM layer
+    model.add(LSTM(units=50, return_sequences=False))
+    model.add(Dropout(0.2))
+    
+    # Output layer
+    model.add(Dense(units=1))
+    
+    # Compile the model
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    
+    early_stop = EarlyStopping(verbose=1, patience = 5)
+    
+    # Train the model
+    model.fit(X_train, y_train, epochs=100, batch_size=32, callbacks=[early_stop])
+    
+    # Construct the filename within the single folder
+    model_weights_path = os.path.join(all_weights_folder, f"model_weights_{cnn}.weights.h5") 
 
-# LSTM layer
-model.add(LSTM(units=50, return_sequences=False))
-model.add(Dropout(0.2))
-
-# Output layer
-model.add(Dense(units=1))
-
-# Compile the model
-model.compile(optimizer='adam', loss='mean_squared_error')
-
-early_stop = EarlyStopping(verbose=1, patience = 5)
-
-# Train the model
-model.fit(X_train, y_train, epochs=100, batch_size=32, callbacks=[early_stop])
-
-# Predictions
-predictions = model.predict(X_test)
-binary_predictions = (predictions > 0).astype(int)
-
-# Confusion Matrix
-cm = confusion_matrix(y_test, binary_predictions)
-plt.figure(figsize=(8, 6))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Class 0', 'Class 1'], yticklabels=['Class 0', 'Class 1'])
-plt.xlabel('Predicted')
-plt.ylabel('Actual')
-plt.title('Confusion Matrix')
-plt.show()
-
-# Classification Report
-print("Classification Report:")
-print(classification_report(y_test, binary_predictions))
-
-# Cumulative Returns
-predicted_returns = np.where(binary_predictions == 1, np.abs(predictions.flatten()), -np.abs(predictions.flatten()))
-actual_cumulative_returns = np.cumprod(1 + df['returns'].iloc[-len(y_test):].values) - 1
-predicted_cumulative_returns = np.cumprod(1 + predicted_returns) - 1
-
-plt.figure(figsize=(14, 7))
-plt.plot(actual_cumulative_returns, label='Actual Cumulative Returns', color='blue', alpha=0.7)
-plt.plot(predicted_cumulative_returns, label='Model Cumulative Returns', color='orange', alpha=0.7)
-plt.title('Cumulative Returns: Actual vs Model')
-plt.xlabel('Time')
-plt.ylabel('Cumulative Returns')
-plt.legend()
-plt.show()
+    # Save the model weights in the folder
+    model.save_weights(model_weights_path)
+    
+    # Predict on test data
+    predictions = model.predict(X_test)
+    
+    binary_predictions = (predictions > 0.7).astype(int)
+    conf_matrix = confusion_matrix(y_test, binary_predictions)
+    long_matrix1 = conf_matrix[0, 1]
+    long_matrix2 = conf_matrix[1, 1]
+    long_sigma_matrix = long_matrix1 + long_matrix2
+    if long_sigma_matrix > 0:  # Prevent division by zero
+        long_precision = (long_matrix2 * 100) / long_sigma_matrix
+    else:
+        long_precision = 0  # If no positive predictions, precision is undefined
+    
+    short_matrix1 = conf_matrix[0, 0]
+    short_matrix2 = conf_matrix[1, 0]
+    short_sigma_matrix = short_matrix1 + short_matrix2
+    if long_sigma_matrix > 0:  # Prevent division by zero
+        short_precision = (short_matrix1 * 100) / short_sigma_matrix
+    else:
+        short_precision = 0  # If no positive predictions, precision is undefined
+    
+    sns.heatmap(conf_matrix, annot=True, fmt='d', cmap="crest")
+    plt.title(f"Model:- {cnn}\n long_pre:- {long_precision}\n short_pre:- {short_precision}")
+    # plt.title(f"long_pre:- {long_precision}\n short_pre:- {short_precision}")
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.show()
+    
+    # Classification Report
+    # print("Classification Report:")
+    # print(classification_report(y_test, binary_predictions))
+    
+    # Plot predictions vs actual returns
+    # plt.figure(figsize=(14, 7))
+    # plt.plot(y_test, label='Actual Returns', alpha=0.7)
+    # plt.plot(predictions, label='Predicted Returns', alpha=0.7)
+    # plt.title('Predicted vs Actual Returns')
+    # plt.legend()
+    # plt.show()
